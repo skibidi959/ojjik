@@ -1,0 +1,756 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
+local SoundService = game:GetService("SoundService")
+local MaterialService = game:GetService("MaterialService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local Core = {}
+
+Core.Opt = {On = false, Saved = {}, Trash = {}}
+Core.XrayOn = false
+Core.Painted = setmetatable({}, {__mode = "k"})
+Core.STYLE_XRAY = {Amount = 1, Color = Color3.fromHSV(0.6, 1, 1)}
+Core.FreezeOn = false
+Core.FrozenAnims = setmetatable({}, {__mode = "k"})
+Core.FrozenConns = {}
+
+local XRAY_WANTED = {
+    -- Map
+    Borders = true, Collisions = true, WallModels = true,
+    Model1 = true, Model = true, Cave = true,
+    GroundCollision = true, BrainrotCollision = true,
+    -- Board & decor
+    AdminBoard = true, EventBoard = true, SoccerScoreBoard = true,
+    EclipseSpinWheel = true, StPatricksPot = true, Shop = true,
+    IncubatorMachine = true, TutorialArrow = true,
+    Road = true, RoadPanel = true, Events = true,
+    kakanskskkssk = true, SUPERMAN_55455 = true,
+    -- Base plot
+    Decorations = true, Cash = true, CashPad = true, PlotSign = true, Purchases = true,
+    LiveBoard = true, StealsBoard = true, GenerationBoard = true,
+    Multiplier = true, FriendPanel = true, PlotBlock = true,
+    -- Zone & hitbox
+    CollectionZone = true,
+    CollectArea = true,
+    DeliveryHitbox = true,
+    StealHitbox = true,
+    Hitbox = true,
+    PathfindingBlocker = true,
+    SpawnVFX = true,
+    SideBarrier = true,
+    WalkAreas = true,
+    ObstacleVolumes = true,
+    SpawnPoints = true,
+    WallTop = true,
+    SpawnWallTop = true,
+    -- Multiplier & misc
+    MultiplierBoard = true,
+    BonusBoard = true,
+}
+
+local XRAY_KEEP = {
+    Ground = true, Ground_Left = true, Ground_Right = true,
+    Carpet = true, Terrain = true,
+    HumanoidRootPart = true, Head = true, Torso = true,
+    UpperTorso = true, LowerTorso = true,
+    LeftUpperArm = true, LeftLowerArm = true, LeftHand = true,
+    RightUpperArm = true, RightLowerArm = true, RightHand = true,
+    LeftUpperLeg = true, LeftLowerLeg = true, LeftFoot = true,
+    RightUpperLeg = true, RightLowerLeg = true, RightFoot = true,
+    Handle = true, AnimalTarget = true, Spawn = true,
+    PromptAttachment = true,
+}
+
+local XRAY_KEEP_FOLDERS = {
+    RenderedMovingAnimals = true,
+    __PROJECTILES = true,
+    Debris = true,
+}
+
+local function IsPlayerCharacter(obj)
+    local model = obj:FindFirstAncestorOfClass("Model")
+    return model and Players:GetPlayerFromCharacter(model) ~= nil
+end
+
+local function XrayKeep(part)
+    if XRAY_KEEP[part.Name] then return true end
+    if IsPlayerCharacter(part) then return true end
+    local myChar = LocalPlayer.Character
+    if myChar and part:IsDescendantOf(myChar) then return true end
+    local cur = part
+    while cur and cur ~= Workspace do
+        if XRAY_KEEP_FOLDERS[cur.Name] then return true end
+        if cur.Name == "Ground" or cur.Name == "Carpet" or cur.Name == "Terrain" then
+            return true
+        end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function IsXrayWanted(part)
+    local cur = part
+    while cur and cur ~= Workspace do
+        if XRAY_WANTED[cur.Name] then return true end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function Save(store, obj, prop, value)
+    local s = Core.Opt.Saved[store]
+    if not s then s = {} Core.Opt.Saved[store] = s end
+    if not s[obj] then s[obj] = {} end
+    if s[obj][prop] == nil then s[obj][prop] = obj[prop] end
+    obj[prop] = value
+end
+
+local function RestoreAll(store)
+    local s = Core.Opt.Saved[store]
+    if not s then return end
+    for obj, props in s do
+        if obj and obj.Parent then
+            for prop, value in props do
+                pcall(function() obj[prop] = value end)
+            end
+        end
+    end
+    Core.Opt.Saved[store] = nil
+end
+
+local function AddConn(store, c)
+    local t = Core.Opt.Trash[store]
+    if not t then t = {} Core.Opt.Trash[store] = t end
+    table.insert(t, c)
+end
+
+local function CleanConns(store)
+    local t = Core.Opt.Trash[store]
+    if not t then return end
+    for _, c in t do pcall(function() c:Disconnect() end) end
+    Core.Opt.Trash[store] = nil
+end
+
+local particleClasses = {ParticleEmitter=true, Fire=true, Smoke=true, Sparkles=true}
+local function ParticlesOn()
+    AddConn("particles", Workspace.DescendantAdded:Connect(function(obj)
+        if particleClasses[obj.ClassName] then
+            task.defer(function() if obj.Parent then obj:Destroy() end end)
+        end
+    end))
+    for _, d in Workspace:GetDescendants() do
+        if particleClasses[d.ClassName] then d:Destroy() end
+    end
+end
+local function ParticlesOff() CleanConns("particles") end
+
+local effectClasses = {ParticleEmitter=true, Trail=true, Beam=true, Fire=true, Smoke=true, Sparkles=true}
+local function EffectsOn()
+    AddConn("effects", Workspace.DescendantAdded:Connect(function(obj)
+        if effectClasses[obj.ClassName] then
+            task.defer(function() if obj.Parent then obj:Destroy() end end)
+        end
+    end))
+    for _, d in Workspace:GetDescendants() do
+        if effectClasses[d.ClassName] then d:Destroy() end
+    end
+end
+local function EffectsOff() CleanConns("effects") end
+
+local function HideViewport(v)
+    if v:IsA("ViewportFrame") and v.Visible then v.Visible = false end
+end
+local function ViewportsOn()
+    AddConn("viewports", Workspace.DescendantAdded:Connect(function(obj)
+        task.defer(HideViewport, obj)
+    end))
+    for _, d in Workspace:GetDescendants() do HideViewport(d) end
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then for _, d in pg:GetDescendants() do HideViewport(d) end end
+end
+local function ViewportsOff() CleanConns("viewports") end
+
+local lightClasses = {PointLight=true, SpotLight=true, SurfaceLight=true}
+local function DimLight(l)
+    if lightClasses[l.ClassName] then Save("lights", l, "Enabled", false) end
+end
+local function LightsOn()
+    AddConn("lights", Workspace.DescendantAdded:Connect(function(obj)
+        if lightClasses[obj.ClassName] then task.defer(DimLight, obj) end
+    end))
+    for _, d in Workspace:GetDescendants() do
+        if lightClasses[d.ClassName] then DimLight(d) end
+    end
+end
+local function LightsOff() CleanConns("lights") RestoreAll("lights") end
+
+local function Silence(s)
+    if s:IsA("Sound") then Save("sounds", s, "Volume", 0) end
+    if s:IsA("SoundEffect") then Save("sounds", s, "Enabled", false) end
+end
+local function SoundsOn()
+    AddConn("sounds", Workspace.DescendantAdded:Connect(function(obj)
+        task.defer(Silence, obj)
+    end))
+    for _, d in Workspace:GetDescendants() do Silence(d) end
+    for _, d in SoundService:GetDescendants() do Silence(d) end
+end
+local function SoundsOff() CleanConns("sounds") RestoreAll("sounds") end
+
+local function Flatten(part)
+    if not part:IsA("BasePart") then return end
+    if part:FindFirstChildWhichIsA("ProximityPrompt", true) then return end
+    if part.Material ~= Enum.Material.SmoothPlastic then
+        Save("materials", part, "Material", Enum.Material.SmoothPlastic)
+    end
+    Save("materials", part, "Reflectance", 0)
+    Save("materials", part, "CastShadow", false)
+end
+local function MaterialsOn()
+    AddConn("materials", Workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("BasePart") then task.defer(Flatten, obj) end
+    end))
+    for _, d in Workspace:GetDescendants() do Flatten(d) end
+end
+local function MaterialsOff() CleanConns("materials") RestoreAll("materials") end
+
+local function QuietLighting(obj)
+    if obj:IsA("PostEffect") then
+        Save("lighting", obj, "Enabled", false)
+    elseif obj:IsA("Sky") or obj:IsA("Atmosphere") then
+        Save("lighting", obj, "Parent", nil)
+    end
+end
+local function LightingOn()
+    Save("lighting", Lighting, "GlobalShadows", false)
+    Save("lighting", Lighting, "FogEnd", 1e9)
+    Save("lighting", Lighting, "FogStart", 0)
+    Save("lighting", Lighting, "Brightness", 1)
+    Save("lighting", Lighting, "Ambient", Color3.new(1,1,1))
+    Save("lighting", Lighting, "OutdoorAmbient", Color3.new(1,1,1))
+    Save("lighting", Lighting, "EnvironmentDiffuseScale", 0)
+    Save("lighting", Lighting, "EnvironmentSpecularScale", 0)
+    pcall(function() Save("lighting", Lighting, "Technology", Enum.Technology.Compatibility) end)
+    for _, obj in Lighting:GetChildren() do QuietLighting(obj) end
+    AddConn("lighting", Lighting.ChildAdded:Connect(function(obj)
+        task.defer(QuietLighting, obj)
+    end))
+end
+local function LightingOff() CleanConns("lighting") RestoreAll("lighting") end
+
+local function TerrainOn()
+    local t = Workspace:FindFirstChildOfClass("Terrain")
+    if not t then return end
+    pcall(function()
+        Save("terrain", t, "WaterWaveSize", 0)
+        Save("terrain", t, "WaterWaveSpeed", 0)
+        Save("terrain", t, "WaterReflectance", 0)
+        Save("terrain", t, "WaterTransparency", 1)
+    end)
+end
+local function TerrainOff() RestoreAll("terrain") end
+
+local function QualityOn()
+    local r = settings().Rendering
+    Save("quality", r, "QualityLevel", Enum.QualityLevel.Level01)
+    Save("quality", r, "MeshPartDetailLevel", Enum.MeshPartDetailLevel.Level04)
+end
+local function QualityOff() RestoreAll("quality") end
+
+local function DropOverhead(o)
+    local p = o.Parent
+    if (o:IsA("SurfaceGui") or o:IsA("BillboardGui")) and p and p.Name == "FastOverheadTemplate" then
+        o:Destroy()
+    end
+end
+local function OverheadsOn()
+    AddConn("overheads", Workspace.DescendantAdded:Connect(function(obj)
+        task.defer(DropOverhead, obj)
+    end))
+    for _, d in Workspace:GetDescendants() do DropOverhead(d) end
+end
+local function OverheadsOff() CleanConns("overheads") end
+
+local function HideTexture(t)
+    if (t:IsA("Decal") or t:IsA("Texture")) then
+        Save("textures", t, "Transparency", 1)
+    end
+end
+local function BlankVariant(mv)
+    if mv:IsA("MaterialVariant") then
+        for _, prop in {"ColorMap","MetalnessMap","NormalMap","RoughnessMap"} do
+            Save("textures", mv, prop, "")
+        end
+    end
+end
+local function TexturesOn()
+    for _, mv in MaterialService:GetChildren() do BlankVariant(mv) end
+    AddConn("textures", Workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Decal") then task.defer(HideTexture, obj) end
+        if obj:IsA("MaterialVariant") then task.defer(BlankVariant, obj) end
+    end))
+    for _, d in Workspace:GetDescendants() do HideTexture(d) end
+end
+local function TexturesOff() CleanConns("textures") RestoreAll("textures") end
+
+local function HideAccessory(acc)
+    if not acc:IsA("Accessory") then return end
+    for _, d in acc:GetDescendants() do
+        if d:IsA("BasePart") then d.LocalTransparencyModifier = 1 end
+    end
+end
+local function AccessoriesOn()
+    AddConn("accessories", Workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Accessory") then task.defer(HideAccessory, obj) end
+    end))
+    for _, d in Workspace:GetDescendants() do
+        if d:IsA("Accessory") then HideAccessory(d) end
+    end
+end
+local function AccessoriesOff() CleanConns("accessories")
+    for _, d in Workspace:GetDescendants() do
+        if d:IsA("BasePart") then d.LocalTransparencyModifier = 0 end
+    end
+end
+
+local function FreezeAnim(anim)
+    if Core.FrozenAnims[anim] then return end
+    Core.FrozenAnims[anim] = {Speed = anim.Speed, Weight = anim.WeightCurrent}
+    pcall(function()
+        anim:AdjustSpeed(0)
+        anim:AdjustWeight(0)
+    end)
+end
+
+local function ThawAnim(anim)
+    local data = Core.FrozenAnims[anim]
+    if not data then return end
+    pcall(function()
+        anim:AdjustSpeed(data.Speed)
+        anim:AdjustWeight(data.Weight)
+    end)
+    Core.FrozenAnims[anim] = nil
+end
+
+local function IsBrainrotAnimator(animator)
+    local cur = animator
+    while cur and cur ~= Workspace do
+        if cur.Name == "RenderedMovingAnimals" then return true end
+        if cur.Name == "Animals" then return true end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function MuteAnimator(animator)
+    if not animator:IsA("Animator") then return end
+    if not IsBrainrotAnimator(animator) then return end
+    for _, track in animator:GetPlayingAnimationTracks() do
+        FreezeAnim(track)
+    end
+    local conn = animator.AnimationPlayed:Connect(FreezeAnim)
+    table.insert(Core.FrozenConns, conn)
+end
+
+local function AnimationsOn()
+    for _, d in ipairs(Workspace:GetDescendants()) do
+        if d:IsA("Animator") then MuteAnimator(d) end
+    end
+    local watchConn = Workspace.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Animator") then
+            task.defer(MuteAnimator, obj)
+        end
+    end)
+    table.insert(Core.FrozenConns, watchConn)
+end
+
+local function AnimationsOff()
+    for _, conn in ipairs(Core.FrozenConns) do
+        pcall(function() conn:Disconnect() end)
+    end
+    table.clear(Core.FrozenConns)
+    for anim in Core.FrozenAnims do
+        ThawAnim(anim)
+    end
+    table.clear(Core.FrozenAnims)
+end
+
+local function Paint(part)
+    if XrayKeep(part) then return end
+    if Core.Painted[part] then return end
+    local texture = nil
+    if part:IsA("MeshPart") and part.TextureID ~= "" then
+        texture = part.TextureID
+    end
+    local data = {Color = part.Color, Texture = texture, Tinted = false}
+    Core.Painted[part] = data
+    part.LocalTransparencyModifier = Core.STYLE_XRAY.Amount
+    part.Color = Core.STYLE_XRAY.Color
+    if texture then part.TextureID = "" end
+    data.Tinted = true
+end
+
+local function Unpaint(part)
+    local data = Core.Painted[part]
+    if not data then return end
+    if part.Parent then
+        pcall(function()
+            part.LocalTransparencyModifier = 0
+            part.Color = data.Color
+            if data.Texture then part.TextureID = data.Texture end
+        end)
+    end
+    Core.Painted[part] = nil
+end
+
+local function HideGui(guiObj)
+    if guiObj:IsA("SurfaceGui") or guiObj:IsA("BillboardGui") then
+        if not Core.Opt.Saved["guis"] then Core.Opt.Saved["guis"] = {} end
+        if not Core.Opt.Saved["guis"][guiObj] then
+            Core.Opt.Saved["guis"][guiObj] = {Enabled = guiObj.Enabled}
+        end
+        guiObj.Enabled = false
+    end
+end
+
+local function RestoreGui(guiObj)
+    local s = Core.Opt.Saved["guis"]
+    if not s then return end
+    local data = s[guiObj]
+    if not data then return end
+    pcall(function() guiObj.Enabled = data.Enabled end)
+    s[guiObj] = nil
+end
+
+local function HideGuiTree(parent)
+    for _, child in ipairs(parent:GetDescendants()) do
+        if child:IsA("SurfaceGui") or child:IsA("BillboardGui") then
+            HideGui(child)
+        end
+    end
+end
+
+local function XrayAll()
+    for _, part in ipairs(Workspace:GetDescendants()) do
+        if part:IsA("BasePart") and part.Parent then
+            if IsXrayWanted(part) and not XrayKeep(part) then
+                Paint(part)
+                HideGuiTree(part)
+            end
+        elseif part:IsA("SurfaceGui") or part:IsA("BillboardGui") then
+            local adornee = part.Adornee
+            local target = adornee or part.Parent
+            if target then
+                local shouldHide = false
+                if target:IsA("BasePart") and IsXrayWanted(target) and not XrayKeep(target) then
+                    shouldHide = true
+                end
+                if not shouldHide then
+                    local cur = target
+                    while cur and cur ~= Workspace do
+                        if XRAY_WANTED[cur.Name] then
+                            shouldHide = true
+                            break
+                        end
+                        cur = cur.Parent
+                    end
+                end
+                if shouldHide then HideGui(part) end
+            end
+        end
+    end
+end
+
+local function UnxrayAll()
+    for part in Core.Painted do
+        Unpaint(part)
+    end
+    table.clear(Core.Painted)
+    local s = Core.Opt.Saved["guis"]
+    if s then
+        for guiObj in s do
+            RestoreGui(guiObj)
+        end
+        Core.Opt.Saved["guis"] = nil
+    end
+end
+
+Core.XrayAll = XrayAll
+Core.UnxrayAll = UnxrayAll
+Core.AnimationsOn = AnimationsOn
+Core.AnimationsOff = AnimationsOff
+
+-- CARPET
+local carpetHidden = false
+local carpetPart = nil
+local carpetConn = nil
+
+local function HideCarpet()
+    if carpetHidden then return end
+    local map = Workspace:FindFirstChild("Map")
+    local carpet = map and map:FindFirstChild("Carpet")
+    if not carpet then
+        warn("[RDOZ] Map.Carpet not found")
+        return
+    end
+    carpetHidden = true
+    carpetPart = carpet
+    local function Force()
+        if carpet.Parent then
+            if carpet.Transparency ~= 1 then carpet.Transparency = 1 end
+            if carpet.LocalTransparencyModifier ~= 1 then carpet.LocalTransparencyModifier = 1 end
+            if carpet.CanCollide then carpet.CanCollide = false end
+        end
+    end
+    Force()
+    carpetConn = RunService.Heartbeat:Connect(Force)
+    warn("[RDOZ] Carpet hidden")
+end
+
+local function RestoreCarpet()
+    if not carpetHidden then return end
+    carpetHidden = false
+    if carpetConn then
+        carpetConn:Disconnect()
+        carpetConn = nil
+    end
+    if carpetPart and carpetPart.Parent then
+        carpetPart.Transparency = 0
+        carpetPart.LocalTransparencyModifier = 0
+        carpetPart.CanCollide = true
+    end
+    carpetPart = nil
+    warn("[RDOZ] Carpet restored")
+end
+
+Core.HideCarpet = HideCarpet
+Core.RestoreCarpet = RestoreCarpet
+local function AllOn()
+    Core.Opt.On = true
+    pcall(ParticlesOn)
+    pcall(EffectsOn)
+    pcall(ViewportsOn)
+    pcall(LightsOn)
+    pcall(SoundsOn)
+    pcall(MaterialsOn)
+    pcall(LightingOn)
+    pcall(TerrainOn)
+    pcall(QualityOn)
+    pcall(OverheadsOn)
+    pcall(TexturesOn)
+    pcall(AccessoriesOn)
+    pcall(AnimationsOn)
+    pcall(HideCarpet)
+    Core.XrayOn = true
+    task.spawn(XrayAll)
+    Core.FreezeOn = true
+end
+
+local function AllOff()
+    Core.Opt.On = false
+    pcall(ParticlesOff)
+    pcall(EffectsOff)
+    pcall(ViewportsOff)
+    pcall(LightsOff)
+    pcall(SoundsOff)
+    pcall(MaterialsOff)
+    pcall(LightingOff)
+    pcall(TerrainOff)
+    pcall(QualityOff)
+    pcall(OverheadsOff)
+    pcall(TexturesOff)
+    pcall(AccessoriesOff)
+    pcall(AnimationsOff)
+    pcall(RestoreCarpet)
+    Core.XrayOn = false
+    UnxrayAll()
+    Core.FreezeOn = false
+end
+
+Core.AllOn = AllOn
+Core.AllOff = AllOff
+
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if Core.XrayOn then
+            for _, part in ipairs(Workspace:GetDescendants()) do
+                if part:IsA("BasePart") and part.Parent then
+                    if not Core.Painted[part] and IsXrayWanted(part) and not XrayKeep(part) then
+                        Paint(part)
+                        HideGuiTree(part)
+                    end
+                elseif part:IsA("SurfaceGui") or part:IsA("BillboardGui") then
+                    local adornee = part.Adornee
+                    local target = adornee or part.Parent
+                    if target then
+                        local shouldHide = false
+                        if target:IsA("BasePart") and IsXrayWanted(target) and not XrayKeep(target) then
+                            shouldHide = true
+                        end
+                        if not shouldHide then
+                            local cur = target
+                            while cur and cur ~= Workspace do
+                                if XRAY_WANTED[cur.Name] then
+                                    shouldHide = true
+                                    break
+                                end
+                                cur = cur.Parent
+                            end
+                        end
+                        if shouldHide then HideGui(part) end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    if Core.XrayOn then task.spawn(XrayAll) end
+    if Core.FreezeOn then task.spawn(AnimationsOn) end
+end)
+
+getgenv().RDOZCore = Core
+warn("[RDOZ Core] Loaded")
+if not getgenv().RDOZCore then return end
+
+local Core = getgenv().RDOZCore
+
+local function GetGuiParent()
+    if gethui then
+        local ok, hui = pcall(gethui)
+        if ok and hui then return hui end
+    end
+    return game:GetService("CoreGui")
+end
+
+local ACCENT = Color3.fromRGB(53, 229, 154)
+local SUB    = Color3.fromRGB(147, 185, 174)
+local INK    = Color3.fromRGB(6, 37, 31)
+
+if getgenv().RDOZGUI and getgenv().RDOZGUI.GUI then
+    pcall(function() getgenv().RDOZGUI.GUI:Destroy() end)
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "RDOZTools"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 100
+gui.Parent = GetGuiParent()
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(220, 170)
+frame.Position = UDim2.new(0, 20, 0.5, -85)
+frame.BackgroundColor3 = Color3.fromRGB(8, 15, 18)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+local c = Instance.new("UICorner")
+c.CornerRadius = UDim.new(0, 8)
+c.Parent = frame
+local s = Instance.new("UIStroke")
+s.Color = ACCENT
+s.Thickness = 1.2
+s.Transparency = 0.4
+s.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 26)
+title.BackgroundColor3 = Color3.fromRGB(12, 25, 30)
+title.BorderSizePixel = 0
+title.Text = "  RDOZ Tools"
+title.TextColor3 = Color3.fromRGB(235, 255, 245)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 11
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+local tc = Instance.new("UICorner")
+tc.CornerRadius = UDim.new(0, 8)
+tc.Parent = title
+
+local mainBtn = Instance.new("TextButton")
+mainBtn.Size = UDim2.new(1, -16, 0, 44)
+mainBtn.Position = UDim2.new(0, 8, 0, 34)
+mainBtn.BackgroundColor3 = ACCENT
+mainBtn.BorderSizePixel = 0
+mainBtn.Text = "ACTIVATE ALL"
+mainBtn.TextColor3 = INK
+mainBtn.Font = Enum.Font.GothamBold
+mainBtn.TextSize = 14
+mainBtn.Parent = frame
+local bc = Instance.new("UICorner")
+bc.CornerRadius = UDim.new(0, 6)
+bc.Parent = mainBtn
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 24)
+status.Position = UDim2.new(0, 8, 0, 84)
+status.BackgroundTransparency = 1
+status.Text = "OFF"
+status.TextColor3 = SUB
+status.Font = Enum.Font.GothamBold
+status.TextSize = 11
+status.Parent = frame
+
+local carpetBtn = Instance.new("TextButton")
+carpetBtn.Size = UDim2.new(1, -16, 0, 26)
+carpetBtn.Position = UDim2.new(0, 8, 0, 116)
+carpetBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
+carpetBtn.BorderSizePixel = 0
+carpetBtn.Text = "REMOVE CARPET"
+carpetBtn.TextColor3 = Color3.fromRGB(220, 240, 255)
+carpetBtn.Font = Enum.Font.GothamBold
+carpetBtn.TextSize = 11
+carpetBtn.Parent = frame
+local cbc = Instance.new("UICorner")
+cbc.CornerRadius = UDim.new(0, 6)
+cbc.Parent = carpetBtn
+
+local state = false
+
+mainBtn.Activated:Connect(function()
+    state = not state
+    if state then
+        task.spawn(Core.AllOn)
+        mainBtn.Text = "DEACTIVATE"
+        mainBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+        mainBtn.TextColor3 = Color3.fromRGB(255, 235, 235)
+        status.Text = "ALL ON — FPS + Invis + Freeze + Carpet"
+        status.TextColor3 = ACCENT
+    else
+        task.spawn(Core.AllOff)
+        mainBtn.Text = "ACTIVATE ALL"
+        mainBtn.BackgroundColor3 = ACCENT
+        mainBtn.TextColor3 = INK
+        status.Text = "OFF"
+        status.TextColor3 = SUB
+    end
+end)
+
+local carpetState = false
+carpetBtn.Activated:Connect(function()
+    carpetState = not carpetState
+    if carpetState then
+        Core.HideCarpet()
+        carpetBtn.Text = "RESTORE CARPET"
+        carpetBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+    else
+        Core.RestoreCarpet()
+        carpetBtn.Text = "REMOVE CARPET"
+        carpetBtn.BackgroundColor3 = Color3.fromRGB(60, 120, 200)
+    end
+end)
+
+getgenv().RDOZGUI = {
+    GUI = gui,
+    Toggle = function() mainBtn:Activate() end,
+}
+warn("[RDOZ GUI] Loaded")
